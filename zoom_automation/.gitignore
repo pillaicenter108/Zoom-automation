@@ -1,0 +1,5 @@
+__pycache__/
+venv1/ 
+service_account.json
+.env
+cloudflared.exe
