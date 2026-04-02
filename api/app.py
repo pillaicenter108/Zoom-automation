@@ -9,9 +9,9 @@ import re
 import streamlit as st
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
-from zoom_automation.agents.graph import graph
-from zoom_automation.agents.state import State
-from zoom_automation.app.scheduler import schedule_meetings
+from agents.graph import graph
+from agents.state import State
+from app.scheduler import schedule_meetings
 
 # ─────────────────────────────────────────
 #  SYSTEM PROMPT
