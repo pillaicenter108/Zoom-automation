@@ -1,7 +1,6 @@
-streamlit==1.32.0
+streamlit==1.25.0
 langchain
 langchain-openai
-langgraph
 gspread
 python-dotenv
 requests
