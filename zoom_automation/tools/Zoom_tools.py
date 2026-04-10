@@ -1,4 +1,5 @@
 import requests
+from datetime import datetime, timezone
 from zoom_automation.services.zoom_service import get_access_token, ZOOM_ACCOUNTS
 
 
@@ -7,18 +8,41 @@ from zoom_automation.services.zoom_service import get_access_token, ZOOM_ACCOUNT
 # ─────────────────────────────────────────
 
 def list_meetings(zoom_account: str) -> list:
-    """List all scheduled meetings for a given Zoom account."""
+    """List all upcoming meetings for a given Zoom account."""
     token = get_access_token(zoom_account)
     host_email = ZOOM_ACCOUNTS[zoom_account]["host_email"]
 
     headers = {"Authorization": f"Bearer {token}"}
     url = f"https://api.zoom.us/v2/users/{host_email}/meetings"
-    params = {"type": "upcoming", "page_size": 100}
+    now = datetime.now(timezone.utc)
 
-    response = requests.get(url, headers=headers, params=params)
-    if response.status_code != 200:
-        return []
-    return response.json().get("meetings", [])
+    all_meetings: dict[str, dict] = {}
+
+    # 'upcoming' — one-time scheduled meetings
+    # 'scheduled' — catches recurring meetings with proper parent IDs
+    for meeting_type in ("upcoming", "scheduled"):
+        params = {"type": meeting_type, "page_size": 100}
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code != 200:
+            continue
+        for m in response.json().get("meetings", []):
+            # Filter to future meetings only
+            start_time_str = m.get("start_time", "")
+            if start_time_str:
+                try:
+                    start_dt = datetime.fromisoformat(
+                        start_time_str.replace("Z", "+00:00")
+                    )
+                    if start_dt < now:
+                        continue  # skip past meetings
+                except ValueError:
+                    pass
+
+            meeting_id = str(m.get("id", ""))
+            if meeting_id and meeting_id != "0" and meeting_id not in all_meetings:
+                all_meetings[meeting_id] = m
+
+    return list(all_meetings.values())
 
 
 # ─────────────────────────────────────────

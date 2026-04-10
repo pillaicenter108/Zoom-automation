@@ -1,8 +1,49 @@
+"""
+app.py — Streamlit UI for ZoomFlow AI.
+
+Uses the LangGraph graph directly (zoom_automation.agents.graph)
+instead of the old manual run_agent loop.
+"""
+
 import re
 import streamlit as st
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
-from zoom_automation.agents.agent import run_agent
+from zoom_automation.agents.graph import graph
+from zoom_automation.agents.state import State
 from zoom_automation.app.scheduler import schedule_meetings
+
+# ─────────────────────────────────────────
+#  SYSTEM PROMPT
+# ─────────────────────────────────────────
+
+SYSTEM_PROMPT = """
+You are ZoomFlow AI, a helpful assistant that manages Zoom meetings.
+
+You have access to tools that can create, list, update, and delete Zoom meetings
+across multiple Zoom accounts (zoom 1, zoom 2, zoom 3).
+
+Rules:
+1. Read the user's request carefully and identify what they want to do.
+2. Choose the right tool for the task.
+3. Only call a tool when ALL required parameters are available.
+4. If a required parameter is missing, ask the user for it — never guess.
+   Required parameters per tool:
+   - create_meeting: topic, start_time, duration, zoom_account
+   - list_meetings:  zoom_account
+   - update_meeting: meeting_id, zoom_account (+ at least one of topic/start_time/duration)
+   - delete_meeting: meeting_id, zoom_account
+5. zoom_account must always include a space: 'zoom 1', 'zoom 2', 'zoom 3'.
+   If the user says 'zoom1' normalize it to 'zoom 1'.
+6. For delete requests, always confirm with the user before calling the tool.
+7. When a tool returns a result, present it clearly. For meeting lists, ALWAYS
+   show the Meeting ID for every meeting — it is needed for updates and deletes.
+8. If no tool is needed, answer directly.
+9. For multiple actions, handle them one at a time in order.
+
+Current year is 2026. Times with no year given should default to 2026.
+Always convert duration to integer minutes (e.g. '2 hours' → 120).
+"""
 
 
 # ─────────────────────────────────────────
@@ -187,6 +228,7 @@ st.markdown("""
 # ─────────────────────────────────────────
 
 def render_chat_response(content: str, is_meeting_list: bool):
+    """Render assistant reply. For meeting lists, show Meeting IDs as copyable code blocks."""
     if not is_meeting_list:
         st.markdown(content)
         return
@@ -205,21 +247,74 @@ def render_chat_response(content: str, is_meeting_list: bool):
             st.markdown(line)
 
 
+def _is_meeting_list_response(reply: str) -> bool:
+    """Detect if the reply looks like a meeting list (has IDs and topics)."""
+    return bool(re.search(r"\b\d{9,11}\b", reply) and ("meeting" in reply.lower()))
+
+
 # ─────────────────────────────────────────
 #  SESSION STATE
 # ─────────────────────────────────────────
+
 if "chat_history" not in st.session_state:
+    # Display history shown in the UI
     st.session_state.chat_history = [
         {
             "role": "assistant",
             "content": (
                 "👋 Hi! I'm **ZoomFlow AI**.\n\n"
-                "I can help you **create**, **list**, or **update** Zoom meetings. "
+                "I can help you **create**, **list**, **update**, or **delete** Zoom meetings. "
                 "Just tell me what you need!"
             ),
             "is_meeting_list": False,
         }
     ]
+
+if "langgraph_state" not in st.session_state:
+    # LangGraph message state — persists across turns
+    st.session_state.langgraph_state = None
+
+
+# ─────────────────────────────────────────
+#  LANGGRAPH INVOKE HELPER
+# ─────────────────────────────────────────
+
+def call_agent(user_input: str) -> str:
+    """
+    Pass user_input into the LangGraph graph, maintain conversation state
+    across Streamlit reruns via st.session_state.langgraph_state.
+    Returns the latest AI text reply.
+    """
+    lg_state: State | None = st.session_state.langgraph_state
+
+    if lg_state is None:
+        # First turn — initialise with system prompt + first user message
+        lg_state = State(
+            messages=[
+                SystemMessage(content=SYSTEM_PROMPT),
+                HumanMessage(content=user_input),
+            ]
+        )
+    else:
+        # Subsequent turns — append new user message
+        lg_state["messages"].append(HumanMessage(content=user_input))
+
+    # Run graph
+    lg_state = graph.invoke(lg_state)
+
+    # Persist updated state back into session
+    st.session_state.langgraph_state = lg_state
+
+    # Extract latest non-empty AI text reply
+    for msg in reversed(lg_state["messages"]):
+        if (
+            isinstance(msg, AIMessage)
+            and isinstance(msg.content, str)
+            and msg.content.strip()
+        ):
+            return msg.content.strip()
+
+    return "(no response)"
 
 
 # ─────────────────────────────────────────
@@ -232,9 +327,9 @@ tab1, tab2 = st.tabs(["⚡  AI Assistant", "📊  Sheet Scheduler"])
 #  TAB 1 — AI ASSISTANT
 # ══════════════════════════════════════════
 with tab1:
-    st.markdown('<div class="page-title">AI Assistant</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-title">Pillai Center AI Assistant</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="page-sub">Chat naturally to create, list, or update your Zoom meetings.</div>',
+        '<div class="page-sub"></div>',
         unsafe_allow_html=True,
     )
 
@@ -245,7 +340,7 @@ with tab1:
             <div class="chat-ai-name">ZoomFlow AI</div>
             <div class="chat-ai-status">
                 <div class="online-dot"></div>
-                Online &nbsp;·&nbsp; llama-3.1-8b-instant
+                Online &nbsp;·&nbsp; 
             </div>
         </div>
     </div>
@@ -256,18 +351,21 @@ with tab1:
         <span class="chip">📋 Show meetings in zoom 1</span>
         <span class="chip">➕ Create a meeting</span>
         <span class="chip">✏️ Reschedule a meeting</span>
-        <span class="chip">📅 List upcoming meetings</span>
+        <span class="chip">🗑️ Delete a meeting</span>
     </div>
     """, unsafe_allow_html=True)
 
+    # Render existing chat history
     for msg in st.session_state.chat_history:
         avatar = "⚡" if msg["role"] == "assistant" else "👤"
         with st.chat_message(msg["role"], avatar=avatar):
             render_chat_response(msg["content"], msg.get("is_meeting_list", False))
 
+    # Chat input
     user_input = st.chat_input("Ask me anything about your Zoom meetings...")
 
     if user_input:
+        # Show user message immediately
         st.session_state.chat_history.append({
             "role": "user",
             "content": user_input,
@@ -276,19 +374,18 @@ with tab1:
         with st.chat_message("user", avatar="👤"):
             st.markdown(user_input)
 
+        # Call LangGraph agent
         with st.chat_message("assistant", avatar="⚡"):
             with st.spinner("Thinking..."):
-                text_reply, is_list, tool_name, pending = run_agent(
-                    user_input,
-                    st.session_state.chat_history[:-1]
-                )
-            render_chat_response(text_reply, is_list)
+                reply = call_agent(user_input)
+            is_list = _is_meeting_list_response(reply)
+            render_chat_response(reply, is_list)
 
+        # Append assistant reply to display history
         st.session_state.chat_history.append({
             "role": "assistant",
-            "content": text_reply,
+            "content": reply,
             "is_meeting_list": is_list,
-            "pending_action": pending,
         })
         st.rerun()
 

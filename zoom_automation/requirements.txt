@@ -1,5 +1,9 @@
-groq
+streamlit>=1.35.0
+pillow>=11.0.0
+langchain
+langchain-openai
 gspread
-dotenv
-pytz
-streamlit
+python-dotenv
+requests
+protobuf==3.20.3
+tiktoken
