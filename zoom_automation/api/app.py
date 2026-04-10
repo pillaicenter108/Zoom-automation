@@ -9,9 +9,27 @@ import re
 import streamlit as st
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
-from zoom_automation.agents.graph import graph
-from zoom_automation.agents.state import State
-from zoom_automation.app.scheduler import schedule_meetings
+
+# ── Lazy-load heavy modules only once (avoids blank screen on every rerun) ──
+@st.cache_resource(show_spinner=False)
+def _load_graph():
+    from zoom_automation.agents.graph import graph
+    return graph
+
+@st.cache_resource(show_spinner=False)
+def _load_state_class():
+    from zoom_automation.agents.state import State
+    return State
+
+@st.cache_resource(show_spinner=False)
+def _load_scheduler():
+    from zoom_automation.app.scheduler import schedule_meetings
+    return schedule_meetings
+
+with st.spinner("⚡ Starting ZoomFlow AI..."):
+    graph             = _load_graph()
+    State             = _load_state_class()
+    schedule_meetings = _load_scheduler()
 
 # ─────────────────────────────────────────
 #  SYSTEM PROMPT
@@ -210,6 +228,79 @@ button[aria-selected="true"][data-baseweb="tab"] {
 
 
 # ─────────────────────────────────────────
+#  HARDCODED CREDENTIALS
+# ─────────────────────────────────────────
+VALID_USERNAME = "pc-admin"
+VALID_PASSWORD = "admin108"
+
+
+# ─────────────────────────────────────────
+#  LOGIN PAGE
+# ─────────────────────────────────────────
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    st.markdown("""
+    <style>
+    .login-wrapper {
+        display: flex; justify-content: center; align-items: center;
+        min-height: 80vh;
+    }
+    .login-card {
+        background: #ffffff; border: 1px solid #e4e8f0;
+        border-radius: 20px; padding: 48px 44px 40px 44px;
+        width: 100%; max-width: 420px;
+        box-shadow: 0 8px 32px rgba(37,99,235,0.10);
+    }
+    .login-logo {
+        display: flex; align-items: center; gap: 10px;
+        justify-content: center; margin-bottom: 8px;
+        font-family: 'DM Sans', sans-serif;
+        font-size: 1.5rem; font-weight: 700; color: #1a1d2e;
+    }
+    .login-logo-icon {
+        width: 42px; height: 42px; border-radius: 11px;
+        background: linear-gradient(135deg, #2563eb, #06b6d4);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 20px; box-shadow: 0 4px 12px rgba(37,99,235,0.3);
+    }
+    .login-subtitle {
+        text-align: center; font-size: 0.83rem; color: #6b7280;
+        margin-bottom: 32px;
+    }
+    .login-divider {
+        border: none; border-top: 1px solid #e4e8f0; margin: 24px 0;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    col_l, col_c, col_r = st.columns([1, 2, 1])
+    with col_c:
+        st.markdown("""
+        <div class="login-card">
+            <div class="login-logo">
+                <div class="login-logo-icon">⚡</div>
+                ZoomFlow
+            </div>
+            <div class="login-subtitle">Sign in to your workspace</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        username = st.text_input("Username", placeholder="Enter your username")
+        password = st.text_input("Password", placeholder="Enter your password", type="password")
+
+        if st.button("Sign In", use_container_width=True):
+            if username == VALID_USERNAME and password == VALID_PASSWORD:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Invalid username or password. Please try again.")
+
+    st.stop()
+
+
+# ─────────────────────────────────────────
 #  NAVBAR
 # ─────────────────────────────────────────
 st.markdown("""
@@ -221,6 +312,15 @@ st.markdown("""
     <span class="zf-badge">v2.0 · Live</span>
 </div>
 """, unsafe_allow_html=True)
+
+# Logout button
+_nav1, _nav2 = st.columns([9, 1])
+with _nav2:
+    if st.button("🚪 Logout"):
+        st.session_state.authenticated = False
+        st.session_state.chat_history = []
+        st.session_state.langgraph_state = None
+        st.rerun()
 
 
 # ─────────────────────────────────────────
